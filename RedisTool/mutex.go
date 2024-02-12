@@ -24,6 +24,7 @@ func NewRedisMutex(key string, value string, duration time.Duration, rdb *redis.
 }
 
 func (rm *RedisMutex) Lock(ctx context.Context) error {
+	//非阻塞式上锁
 	result, err := rm.rdb.SetNX(ctx, rm.Key, rm.Value, rm.Duration).Result()
 	if err != nil {
 		return err
@@ -35,6 +36,7 @@ func (rm *RedisMutex) Lock(ctx context.Context) error {
 }
 
 func (rm *RedisMutex) Unlock(ctx context.Context) error {
+	//释放锁
 	result, err := rm.rdb.Del(ctx, rm.Key).Result()
 	if err != nil {
 		return err
@@ -46,6 +48,7 @@ func (rm *RedisMutex) Unlock(ctx context.Context) error {
 }
 
 func (rm *RedisMutex) BlockLock(ctx context.Context) error {
+	//阻塞式上锁
 	err := rm.Lock(ctx)
 	for err != nil {
 		err = rm.Lock(ctx)
