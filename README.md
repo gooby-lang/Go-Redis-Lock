@@ -1,4 +1,9 @@
 基于Go语言的Redis分布式锁
+> 可重入，乐观锁，悲观锁，续租策略
+> 基于RedLock实现分布式锁
+
+
+
 1、自定义一个Mutex互斥锁
 ```go
 type RedisMutex struct {
@@ -61,5 +66,7 @@ func MutexBlockGet(ctx context.Context, key string) (any, error) {
 ```
 
 注意点：
+
 1、在执行事务之前，先上锁，获取到锁之后再执行过程，执行结束后释放锁。
+
 2、为了防止事务执行过程中发生错误导致一直占有锁不放开，所以需要设置过期时间，从而防止死锁。
