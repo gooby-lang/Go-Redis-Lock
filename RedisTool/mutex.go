@@ -66,13 +66,13 @@ func (rm *RedisMutex) Lock(ctx context.Context) error {
 // startWatchDog 利用看门狗机制实行续租功能
 func (rm *RedisMutex) startWatchDog(ctx context.Context) error {
 	rm.watchDog = make(chan struct{})
-	ticker := time.NewTicker(rm.expiration)
+	ticker := time.NewTicker(rm.renewInterval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ticker.C:
 			//续租
-			result, err := rm.rdb.Expire(ctx, rm.resource, rm.renewInterval).Result()
+			result, err := rm.rdb.Expire(ctx, rm.resource, rm.expiration).Result()
 			if err != nil || !result {
 				//续租失败
 				return nil

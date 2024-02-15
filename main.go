@@ -44,7 +44,7 @@ func test1() {
 	for i := 0; i < 10; i++ {
 		wg.Add(1)
 		go func(id int) {
-			ctx, cancel := context.WithTimeout(context.Background(), 1000*time.Millisecond)
+			ctx, cancel := context.WithTimeout(context.Background(), 10000*time.Millisecond)
 			defer wg.Done()
 			defer cancel()
 			err := rm.Lock(ctx)
@@ -53,7 +53,7 @@ func test1() {
 				return
 			}
 			fmt.Printf("Gorouter %d GET IT!!!!!!!!!!\n", id)
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(300 * time.Millisecond)
 			fmt.Printf("Gorouter %d FINISHED IT !!!!!!!!!!!!!\n", id)
 			defer rm.Unlock(ctx)
 		}(i)
