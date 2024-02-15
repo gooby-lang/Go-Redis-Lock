@@ -5,10 +5,17 @@ import (
 	"time"
 )
 
-var ErrLockFailed = errors.New("lock failed")    //获取锁失败错误
-var ErrTimeout = errors.New("lock get time out") //超时错误
-var ErrDelLock = errors.New("lock delete error") //锁删除错误
+var (
+	ErrGetLockFailed  = errors.New("GET lock failed")   //获取锁失败错误
+	ErrGetLockTimeout = errors.New("get lock time out") //超时错误
+	ErrDelLock        = errors.New("lock delete error") //锁删除错误
+)
 
-var timeout = 100 * time.Millisecond     //获取锁超时时间
-var timeInterval = 40 * time.Millisecond //获取锁的时间间隔
-var lockTimeout = 200 * time.Millisecond //锁的有效时间
+const (
+	LOCK_TIMEOUT   = 200 * time.Millisecond //锁的有效时间
+	RENEW_INTERVAL = 100 * time.Millisecond //续租锁的时间间隔
+	UNLOCK_SCRIPT  = `if redis.call("get", KEYS[1], ARGV[1]) == 1 then
+						return redis.call("del", KEYS[1]);
+					end;
+					return 0;`  //解锁脚本
+)
