@@ -11,7 +11,7 @@ import (
 var testTimeout = 200 * time.Millisecond
 
 func main() {
-	test1()
+	test2()
 }
 func test() {
 	rm := RedisTool.InitMutex()
@@ -56,6 +56,29 @@ func test1() {
 			time.Sleep(300 * time.Millisecond)
 			fmt.Printf("Gorouter %d FINISHED IT !!!!!!!!!!!!!\n", id)
 			defer rm.Unlock(ctx)
+		}(i)
+		//time.Sleep(100 * time.Millisecond)
+	}
+	wg.Wait()
+}
+func test2() {
+	rm := RedisTool.NewRedLock(11)
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func(id int) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10000*time.Millisecond)
+			defer wg.Done()
+			defer cancel()
+			err := rm.Lock(ctx)
+			if err != nil {
+				fmt.Printf("router %d FUCK %v\n", id, err)
+				return
+			}
+			fmt.Printf("Gorouter %d GET IT!!!!!!!!!!\n", id)
+			time.Sleep(100 * time.Millisecond)
+			fmt.Printf("Gorouter %d FINISHED IT !!!!!!!!!!!!!\n", id)
+			defer rm.UnLock(ctx)
 		}(i)
 		//time.Sleep(100 * time.Millisecond)
 	}
