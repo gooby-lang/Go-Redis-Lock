@@ -6,17 +6,106 @@
 > 锁的有效时间和获取锁的阻塞时间上限关系
 > 续租策略和可重入
 
-### 互斥锁部分
-
-需要实现加锁和解锁
+### 锁的初始化部分
+```go
+// lockOptions 锁的设置
+type lockOptions struct {
+    key        string        //资源名称
+    token      string        //唯一标识符
+    expiration time.Duration //锁的过期时间
+}
+// RedisMutex 互斥锁
+type RedisMutex struct {
+    lockOptions
+    rdb            *redis.Client //redis客户端
+    watchDog       chan struct{} //看门狗
+    renewInterval  time.Duration //续租间隔
+    reentrantCount int           //可重入计数器
+}
+// NewRedisMutex 新建一个redis锁
+func NewRedisMutex(key string, duration time.Duration, rdb *redis.Client) *RedisMutex {
+	return &RedisMutex{
+		rdb: rdb,
+		lockOptions: lockOptions{
+			key:        key,
+			token:      gofakeit.UUID(),
+			expiration: duration,
+		},
+		watchDog:       make(chan struct{}),
+		renewInterval:  RENEW_INTERVAL,
+		reentrantCount: 0,
+	}
+}
+```
 
 #### 加锁
-
-使用SETNX实现
+```go
+// TryLock 尝试获取一次锁
+func (rm *RedisMutex) TryLock(ctx context.Context) error {
+	//尝试获取锁
+	result, err := rm.rdb.SetNX(ctx, rm.key, rm.token, rm.expiration).Result()
+	//语句执行错误
+	if err != nil {
+		return err
+	}
+	//获取锁失败
+	if !result {
+		return ErrGetLockFailed
+	}
+	//获取锁成功，启动看门狗机制
+	go rm.startWatchDog(ctx)
+	return nil
+}
+```
+```go
+// Lock 阻塞式获取锁，支持续租
+func (rm *RedisMutex) Lock(ctx context.Context) error {
+	//尝试获取一次锁
+	err := rm.TryLock(ctx)
+	//获取成功
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, ErrGetLockFailed) {
+		return err
+	}
+	//阻塞式获取锁
+	//启动续租计时器
+	ticker := time.NewTicker(rm.renewInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			//超时或者取消
+			return ErrGetLockTimeout
+		case <-ticker.C:
+			//触发续租事件
+			err := rm.TryLock(ctx)
+			if err == nil {
+				return nil
+			}
+			if !errors.Is(err, ErrGetLockFailed) {
+				return err
+			}
+		}
+	}
+}
+```
 
 #### 解锁
-
-使用lua脚本实现
+```go
+// Unlock 释放锁
+func (rm *RedisMutex) Unlock(ctx context.Context) error {
+	// 释放锁
+	result, err := rm.rdb.Eval(ctx, UNLOCK_SCRIPT, []string{rm.key}, rm.token).Result()
+	// 释放锁之后关闭watch dog
+	close(rm.watchDog)
+	if err != nil || result == 0 {
+		return ErrDelLock
+	}
+	return nil
+}
+```
 
 ### RedLock部分
 
@@ -30,75 +119,6 @@
 
 4、否则需要把加锁成功的节点进行解锁操作
 
-
-
-
-
-
-
-
-
-1、自定义一个Mutex互斥锁
-
-```go
-type RedisMutex struct {
-	Key      string
-	Value    string
-	Duration time.Duration
-	rdb      *redis.Client
-}
-```
-2、利用SETNX完成上锁
-```go
-func (rm *RedisMutex) Lock(ctx context.Context) error {
-	//非阻塞式上锁
-	result, err := rm.rdb.SetNX(ctx, rm.Key, rm.Value, rm.Duration).Result()
-	if err != nil {
-		return err
-	}
-	if !result {
-		return fmt.Errorf("Failed to get mutex %s\n", rm.Key)
-	}
-	return nil
-}
-```
-```go
-func (rm *RedisMutex) BlockLock(ctx context.Context) error {
-	//阻塞式上锁
-	err := rm.Lock(ctx)
-	for err != nil {
-		err = rm.Lock(ctx)
-	}
-	return err
-}
-```
-3、重写GET，SET方法
-```go
-func MutexBlockSet(ctx context.Context, key string, value any, duration time.Duration) (string, error) {
-	//阻塞式的set
-	err := rm.BlockLock(ctx)
-	if err != nil {
-		return "false", err
-	}
-	defer rm.Unlock(ctx)
-	_, err = rm.rdb.Set(ctx, key, value, duration).Result()
-	result, err := rm.rdb.Set(ctx, key, value, duration).Result()
-	return result, err
-}
-```
-
-```go
-func MutexBlockGet(ctx context.Context, key string) (any, error) {
-	//阻塞式的get
-	err := rm.BlockLock(ctx)
-	if err != nil {
-		return false, err
-	}
-	defer rm.Unlock(ctx)
-	result, err := rm.rdb.Get(ctx, key).Result()
-	return result, err
-}
-```
 
 注意点：
 

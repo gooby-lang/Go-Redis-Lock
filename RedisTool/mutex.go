@@ -8,21 +8,22 @@ import (
 	"time"
 )
 
+// NewRedisMutex 新建一个redis锁
 func NewRedisMutex(key string, duration time.Duration, rdb *redis.Client) *RedisMutex {
 	return &RedisMutex{
 		rdb: rdb,
-		lockOptions: lockOptions{
-			key:        key,
-			token:      gofakeit.UUID(),
-			expiration: duration,
+		LockOptions: LockOptions{
+			Key:        key,
+			Token:      gofakeit.UUID(),
+			Expiration: duration,
 		},
-		watchDog:       make(chan struct{}),
+		watchDog:       nil,
 		renewInterval:  RENEW_INTERVAL,
 		reentrantCount: 0,
 	}
 }
 
-// Lock 阻塞式获取锁，支持续租和可重入策略
+// Lock 阻塞式获取锁，支持续租
 func (rm *RedisMutex) Lock(ctx context.Context) error {
 	//尝试获取一次锁
 	err := rm.TryLock(ctx)
@@ -57,20 +58,23 @@ func (rm *RedisMutex) Lock(ctx context.Context) error {
 
 // startWatchDog 利用看门狗机制实行续租功能
 func (rm *RedisMutex) startWatchDog(ctx context.Context) error {
-	rm.watchDog = make(chan struct{})
+	if rm.watchDog == nil {
+		rm.watchDog = make(chan struct{})
+	}
+	// 设定计时器
 	ticker := time.NewTicker(rm.renewInterval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ticker.C:
-			//续租
-			result, err := rm.rdb.Expire(ctx, rm.key, rm.expiration).Result()
+			// 每过一段时间就续租
+			result, err := rm.rdb.Expire(ctx, rm.Key, rm.Expiration).Result()
 			if err != nil || !result {
 				//续租失败
-				return nil
+				panic(ErrLockRent)
 			}
 		case <-rm.watchDog:
-			//已经解锁
+			// 已经解锁
 			return nil
 		}
 	}
@@ -78,13 +82,8 @@ func (rm *RedisMutex) startWatchDog(ctx context.Context) error {
 
 // TryLock 尝试获取一次锁
 func (rm *RedisMutex) TryLock(ctx context.Context) error {
-	//检查可重入计数器，是否已经拥有锁
-	//if rm.reentrantCount > 0 {
-	//	rm.reentrantCount++
-	//	return nil
-	//}
 	//尝试获取锁
-	result, err := rm.rdb.SetNX(ctx, rm.key, rm.token, rm.expiration).Result()
+	result, err := rm.rdb.SetNX(ctx, rm.Key, rm.Token, rm.Expiration).Result()
 	//语句执行错误
 	if err != nil {
 		return err
@@ -100,9 +99,12 @@ func (rm *RedisMutex) TryLock(ctx context.Context) error {
 
 // Unlock 释放锁
 func (rm *RedisMutex) Unlock(ctx context.Context) error {
-	//释放锁
-	result, err := rm.rdb.Eval(ctx, UNLOCK_SCRIPT, []string{rm.key}, rm.token).Result()
-	close(rm.watchDog)
+	// 释放锁
+	result, err := rm.rdb.Eval(ctx, UNLOCK_SCRIPT, []string{rm.Key}, rm.Token).Result()
+	// 释放锁之后关闭watch dog
+	if _, ok := <-rm.watchDog; !ok {
+		close(rm.watchDog)
+	}
 	if err != nil || result == 0 {
 		return ErrDelLock
 	}
