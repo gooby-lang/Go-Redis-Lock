@@ -42,6 +42,7 @@ var (
 )
 
 const (
+	ALL_NODE_TIMEOUT    = 2000 * time.Millisecond
 	LOCK_TIMEOUT        = 600 * time.Millisecond //锁的有效时间
 	RENEW_INTERVAL      = 500 * time.Millisecond //续租锁的时间间隔
 	SINGLE_NODE_TIMEOUT = 400 * time.Millisecond //单个节点的交互时间上限

@@ -49,11 +49,9 @@ func (rl *RedLock) startWatchDog(idxList []int, lop LockOptions, ctx context.Con
 		select {
 		case <-ticker.C:
 			// 每隔一段时间就续租
-			fmt.Printf("FUCK!!!!!!!!\n")
 			for _, idx := range idxList {
 				result, err := rl.redisClients[idx].rdb.Eval(ctx, EXPIRE_SCRIPT, []string{lop.Key, lop.Token}, lop.Expiration).Result()
 				if err != nil || result == 0 {
-					fmt.Printf("%v:=======%v\n", err, result)
 					panic(ErrLockRent)
 				}
 			}
@@ -68,23 +66,33 @@ func (rl *RedLock) Lock(ctx context.Context, lop LockOptions) error {
 	// 遍历尝试对所有节点申请锁
 	var successNum = 0 //成功上锁数量
 	idxList := make([]int, 0)
+	t1 := time.Now()
+	var wg sync.WaitGroup
 	for idx, lockClient := range rl.redisClients {
-		// 顺序对所有节点上锁
-		err := lockClient.UnitTryLock(ctx, lop)
-		if err == nil {
-			// 如果上锁成功，计数++
-			successNum++
-			idxList = append(idxList, idx)
-		}
+		// 并发对所有节点上锁
+		lockClient := lockClient
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			err := lockClient.UnitTryLock(ctx, lop)
+			if err == nil {
+				// 如果上锁成功，计数++
+				successNum++
+				idxList = append(idxList, idx)
+			}
+		}(idx)
 	}
-	fmt.Println(idxList)
+	wg.Wait()
+	t2 := time.Since(t1)
+	//fmt.Println(t2)
+	//fmt.Println(idxList)
 	//fmt.Printf("%d:------------------", successNum)
 	if len(idxList) != successNum {
 		fmt.Printf("%d=====%d\n", len(idxList), successNum)
 		panic(ErrDelLock)
 	}
-	if successNum > len(rl.redisClients)/2 {
-		//过半了才表示获取成功
+	// 需要保证过半节点申请成功并且剩余时间足够完成任务或者续租才行
+	if successNum > len(rl.redisClients)/2 && t2 < ALL_NODE_TIMEOUT {
 		go rl.startWatchDog(idxList, lop, ctx)
 		return nil
 	}
@@ -117,13 +125,7 @@ func (rl *RedLock) UnLock(ctx context.Context, lop LockOptions) error {
 
 // UnitTryLock 尝试对某个节点申请锁
 func (rlc *redisLockClient) UnitTryLock(ctx context.Context, lops LockOptions) error {
-	t1 := time.Now()
 	result, err := rlc.rdb.SetNX(ctx, lops.Key, lops.Token, lops.Expiration).Result()
-	t2 := time.Since(t1)
-	//fmt.Printf("%v:============\n", t2)
-	if t2 > SINGLE_NODE_TIMEOUT {
-		return ErrGetLockTimeout
-	}
 	//申请成功
 	if err == nil && result {
 		return nil

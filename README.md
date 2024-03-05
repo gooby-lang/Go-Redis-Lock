@@ -1,10 +1,4 @@
 基于Go语言的Redis分布式锁
-> 可重入，乐观锁，悲观锁，续租策略
-> 基于RedLock实现分布式锁
-
-分析：
-> 锁的有效时间和获取锁的阻塞时间上限关系
-> 续租策略和可重入
 
 ### 锁的初始化部分
 ```go
@@ -111,17 +105,75 @@ func (rm *RedisMutex) Unlock(ctx context.Context) error {
 
 设有n个redis节点
 
-1、每次尝试加锁时候，都会对n个节点同时申请加锁
+1、每次尝试加锁时候，都会对n个节点同时申请加锁，同时记录开始时的时间戳。
 
-2、每个节点有一个请求处理超时阈值
+2、如果过半节点加锁成功，且使用时间小于锁的有效时间时，则加锁成功，并且启动看门狗。
 
-3、如果过半节点加锁成功，则加锁成功
-
-4、否则需要把加锁成功的节点进行解锁操作
+3、否则需要把加锁成功的节点进行解锁操作。
 
 
-注意点：
+#### 加锁
 
-1、在执行事务之前，先上锁，获取到锁之后再执行过程，执行结束后释放锁。
+```go
 
-2、为了防止事务执行过程中发生错误导致一直占有锁不放开，所以需要设置过期时间，从而防止死锁。
+// Lock 对所有的节点上锁
+func (rl *RedLock) Lock(ctx context.Context, lop LockOptions) error {
+	// 遍历尝试对所有节点申请锁
+	var successNum = 0 //成功上锁数量
+	idxList := make([]int, 0)
+	t1 := time.Now()
+	var wg sync.WaitGroup
+	for idx, lockClient := range rl.redisClients {
+		// 并发对所有节点上锁
+		lockClient := lockClient
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			err := lockClient.UnitTryLock(ctx, lop)
+			if err == nil {
+				// 如果上锁成功，计数++
+				successNum++
+				idxList = append(idxList, idx)
+			}
+		}(idx)
+	}
+	wg.Wait()
+	t2 := time.Since(t1)
+	fmt.Println(t2)
+	fmt.Println(idxList)
+	//fmt.Printf("%d:------------------", successNum)
+	if len(idxList) != successNum {
+		fmt.Printf("%d=====%d\n", len(idxList), successNum)
+		panic(ErrDelLock)
+	}
+	// 需要保证过半节点申请成功并且剩余时间足够完成任务或者续租才行
+	if successNum > len(rl.redisClients)/2 && t2 < ALL_NODE_TIMEOUT {
+		go rl.startWatchDog(idxList, lop, ctx)
+		return nil
+	}
+	//否则表示获取失败，需要对已经上锁的解锁
+	for _, num := range idxList {
+		err := rl.redisClients[num].UnitUnLock(ctx, lop)
+		if err != nil {
+			panic(err)
+		}
+	}
+	idxList = nil
+	return ErrGetLockFailed
+}
+```
+```go
+// UnitTryLock 尝试对某个节点申请锁
+func (rlc *redisLockClient) UnitTryLock(ctx context.Context, lops LockOptions) error {
+	result, err := rlc.rdb.SetNX(ctx, lops.Key, lops.Token, lops.Expiration).Result()
+	//申请成功
+	if err == nil && result {
+		return nil
+	}
+	//申请失败
+	if err != nil {
+		return err
+	}
+	return ErrGetLockFailed
+}
+```

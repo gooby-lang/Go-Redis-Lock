@@ -95,7 +95,7 @@ func test3() {
 func test4() {
 	redLock := RedisTool.NewRedLock(5)
 	var wg sync.WaitGroup
-	for i := 0; i < 2; i++ {
+	for i := 0; i < 100; i++ {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
